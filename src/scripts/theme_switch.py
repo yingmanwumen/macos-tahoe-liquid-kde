@@ -289,28 +289,6 @@ def detect_mode_by_time() -> str:
     return "light" if 6 <= h < 18 else "dark"
 
 
-def _wallpaper_path(mode: str) -> Path | None:
-    data_home = Path(os.environ.get("XDG_DATA_HOME") or
-                     str(Path.home() / ".local/share"))
-    base = data_home / "wallpapers"
-    auto = base / "MacTahoe"
-    if auto.is_dir():
-        return auto
-    legacy = base / ("MacTahoe-Dark" if mode == "dark" else "MacTahoe-Light")
-    return legacy if legacy.is_dir() else None
-
-
-def _apply_wallpaper(mode: str) -> bool:
-    wp = _wallpaper_path(mode)
-    if wp is None or not _have("plasma-apply-wallpaperimage"):
-        return False
-    try:
-        return _run_user(["plasma-apply-wallpaperimage", str(wp)],
-                         timeout=20).returncode == 0
-    except subprocess.TimeoutExpired:
-        return False
-
-
 def flush_icon_caches() -> None:
     home = Path.home()
     for sub in (".cache/icon-cache.kcache", ".cache/kiconthemes"):
@@ -567,7 +545,9 @@ def apply(mode: str, context: str = "user") -> bool:
         print("theme apply: core KDE config writes failed, theme not "
               "fully applied", file=sys.stderr)
     try:
-        _apply_wallpaper(mode)
+        # Wallpaper ownership stays with the user. The installer may apply a
+        # bundled wallpaper when WALLPAPERS is explicitly selected, but the
+        # recurring light/dark switch must never overwrite it.
         _apply_local_extras(mode)
     except Exception as exc:
         print(f"theme apply: extras step failed, continuing: {exc!r}",

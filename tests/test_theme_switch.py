@@ -149,8 +149,6 @@ def _stub_apply_dependencies(monkeypatch, calls):
     import theme_switch
     monkeypatch.setattr(theme_switch, "write_kde_theme_config",
                         lambda mode: calls.append(("write", mode)) or True)
-    monkeypatch.setattr(theme_switch, "_apply_wallpaper",
-                        lambda mode: calls.append(("wallpaper", mode)) or True)
     monkeypatch.setattr(theme_switch, "_apply_local_extras",
                         lambda mode: calls.append(("local_extras", mode)))
     monkeypatch.setattr(theme_switch, "_apply_lookandfeel_live",
@@ -164,10 +162,11 @@ def _stub_apply_dependencies(monkeypatch, calls):
 
 
 def test_apply_runs_full_pipeline_in_order(monkeypatch):
-    """A single apply() always runs: write → wallpaper → local extras
-    → live LAF → live cursor → Kvantum cycle → KWin reconfigure, in
+    """A single apply() always runs: write → local extras → live LAF
+    → live cursor → Kvantum cycle → KWin reconfigure, in
     that order. Reordering or skipping any step here breaks the live
-    switch (skipped cycle = stale palette in plasmashell, etc.)."""
+    switch (skipped cycle = stale palette in plasmashell, etc.).
+    Wallpaper is deliberately not part of this recurring pipeline."""
     import theme_switch
     calls: list = []
     _stub_apply_dependencies(monkeypatch, calls)
@@ -203,8 +202,6 @@ def test_apply_finishes_cycle_and_reconfigure_when_extras_raise(monkeypatch):
     calls: list = []
     monkeypatch.setattr(theme_switch, "write_kde_theme_config",
                         lambda mode: calls.append(("write", mode)) or True)
-    monkeypatch.setattr(theme_switch, "_apply_wallpaper",
-                        lambda mode: calls.append(("wallpaper", mode)) or True)
     monkeypatch.setattr(theme_switch, "_apply_lookandfeel_live",
                         lambda laf: calls.append(("laf", laf)) or True)
     monkeypatch.setattr(theme_switch, "apply_cursortheme_live",
@@ -339,7 +336,7 @@ def test_main_rejects_invalid_mode(monkeypatch):
 
 
 _APPLY_SUBCALLS = (
-    "write_kde_theme_config", "_apply_wallpaper", "_apply_local_extras",
+    "write_kde_theme_config", "_apply_local_extras",
     "_apply_lookandfeel_live", "apply_cursortheme_live",
     "cycle_widget_style_live", "_qdbus",
 )
@@ -408,7 +405,6 @@ def test_apply_fails_when_config_writes_fail(monkeypatch):
     _stub_apply_subcalls(monkeypatch, calls, ret=False)
     monkeypatch.setattr(theme_switch, "write_kde_theme_config",
                         lambda mode: True)
-    monkeypatch.setattr(theme_switch, "_apply_wallpaper", lambda mode: True)
     monkeypatch.setattr(theme_switch, "_apply_local_extras", lambda mode: True)
     assert theme_switch.apply("dark") is True
 

@@ -45,6 +45,7 @@
 #include <QWindow>
 #include <cmath> // for ceil()
 #include <cstdlib>
+#include <climits>
 
 #include <KConfigGroup>
 #include <KSharedConfig>
@@ -62,41 +63,46 @@ static void ensureResources()
     Q_INIT_RESOURCE(liquidglass);
 }
 
+static QString shaderPath(const QString& name, const QString& extension)
+{
+    // KWin 6.7+ loads the requested file verbatim and translates modern
+    // GLSL for the active context. Legacy attribute/varying syntax fails
+    // on the GLES 3 context used by KWin 6.8.
+#if ACRYLIC_GLASS_KWIN_6_7
+    return QStringLiteral(":/effects/liquidglass/shaders/") + name + QStringLiteral("_core.") + extension;
+#else
+    return QStringLiteral(":/effects/liquidglass/shaders/") + name + QStringLiteral(".") + extension;
+#endif
+}
+
 namespace KWin {
 
 #if ACRYLIC_GLASS_KWIN_6_7
 /// 6.7 removed the global scaledRect() helper (it lived in
-/// effect/globals.h pre-6.7). Re-provide it verbatim so the call sites
-/// below stay version-agnostic.
+/// effect/globals.h pre-6.7). Re-provide it verbatim so the three call
+/// sites below stay version-agnostic.
 inline QRectF scaledRect(const QRectF& rect, qreal scale)
 {
     return QRectF{rect.x() * scale, rect.y() * scale, rect.width() * scale, rect.height() * scale};
 }
-
-// KWin 6.8 removed snapToPixelGrid()/snapToPixelGridF() in favour of the
-// lower-level snapToPixels() overloads. These call sites already operate on
-// device-pixel coordinates, so toAlignedRect() preserves the old behavior:
-// round the outer bounds to an integer device-pixel rectangle.
-inline QRect snapToDeviceRect(const QRectF& rect)
-{
-    return rect.toAlignedRect();
-}
-
-inline QRectF snapToDeviceRectF(const QRectF& rect)
-{
-    return QRectF(std::round(rect.left()), std::round(rect.top()), std::round(rect.width()), std::round(rect.height()));
-}
-#else
-inline QRect snapToDeviceRect(const QRectF& rect)
-{
-    return snapToPixelGrid(rect);
-}
-
-inline QRectF snapToDeviceRectF(const QRectF& rect)
-{
-    return snapToPixelGridF(rect);
-}
 #endif
+
+/// 6.8 removed snapToPixelGrid / snapToPixelGridF (replaced by the
+/// scale-aware snapToPixels in core/pixelgrid.h). Re-provide the old
+/// round-both-corners semantics under local names so every KWin
+/// version resolves the same implementation.
+inline QRectF agSnapToPixelGridF(const QRectF& rect)
+{
+    return QRectF(QPointF(std::round(rect.left()), std::round(rect.top())),
+                  QPointF(std::round(rect.right()), std::round(rect.bottom())));
+}
+
+inline QRect agSnapToPixelGrid(const QRectF& rect)
+{
+    const QPoint topLeft(std::round(rect.left()), std::round(rect.top()));
+    const QPoint bottomRight(std::round(rect.right()), std::round(rect.bottom()));
+    return QRect(topLeft.x(), topLeft.y(), bottomRight.x() - topLeft.x(), bottomRight.y() - topLeft.y());
+}
 
 /// X11 atom name we listen to for the blur-behind property protocol.
 static const QByteArray s_blurAtomName = QByteArrayLiteral("_KDE_NET_WM_BLUR_BEHIND_REGION");
@@ -157,7 +163,7 @@ BlurEffect::BlurEffect()
 
     // Onscreen pass: SDF + drift + lens + rim, the user-facing surface
     m_roundedOnscreenPass.shader = ShaderManager::instance()->generateShaderFromFile(
-        ShaderTrait::MapTexture, QStringLiteral(":/effects/liquidglass/shaders/glass.vert"), QStringLiteral(":/effects/liquidglass/shaders/glass.frag"));
+        ShaderTrait::MapTexture, shaderPath(QStringLiteral("glass"), QStringLiteral("vert")), shaderPath(QStringLiteral("glass"), QStringLiteral("frag")));
     if (!m_roundedOnscreenPass.shader) {
         qCWarning(KWIN_BLUR) << "Failed to load onscreen pass shader (null)";
         return;
@@ -174,6 +180,7 @@ BlurEffect::BlurEffect()
         m_roundedOnscreenPass.offsetLocation = m_roundedOnscreenPass.shader->uniformLocation("offset");
         m_roundedOnscreenPass.halfpixelLocation = m_roundedOnscreenPass.shader->uniformLocation("halfpixel");
         m_roundedOnscreenPass.boxLocation = m_roundedOnscreenPass.shader->uniformLocation("box");
+        m_roundedOnscreenPass.cornerSquircleLocation = m_roundedOnscreenPass.shader->uniformLocation("cornerSquircle");
         m_roundedOnscreenPass.cornerRadiusLocation = m_roundedOnscreenPass.shader->uniformLocation("cornerRadius");
         m_roundedOnscreenPass.opacityLocation = m_roundedOnscreenPass.shader->uniformLocation("opacity");
         m_roundedOnscreenPass.blurSizeLocation = m_roundedOnscreenPass.shader->uniformLocation("blurSize");
@@ -193,7 +200,7 @@ BlurEffect::BlurEffect()
 
     // Dual Kawase downsample pass
     m_downsamplePass.shader = ShaderManager::instance()->generateShaderFromFile(
-        ShaderTrait::MapTexture, QStringLiteral(":/effects/liquidglass/shaders/vertex.vert"), QStringLiteral(":/effects/liquidglass/shaders/downsample.frag"));
+        ShaderTrait::MapTexture, shaderPath(QStringLiteral("vertex"), QStringLiteral("vert")), shaderPath(QStringLiteral("downsample"), QStringLiteral("frag")));
     if (!m_downsamplePass.shader) {
         qCWarning(KWIN_BLUR) << "Failed to load downsampling pass shader";
         return;
@@ -205,7 +212,7 @@ BlurEffect::BlurEffect()
 
     // Dual Kawase upsample pass
     m_upsamplePass.shader = ShaderManager::instance()->generateShaderFromFile(
-        ShaderTrait::MapTexture, QStringLiteral(":/effects/liquidglass/shaders/vertex.vert"), QStringLiteral(":/effects/liquidglass/shaders/upsample.frag"));
+        ShaderTrait::MapTexture, shaderPath(QStringLiteral("vertex"), QStringLiteral("vert")), shaderPath(QStringLiteral("upsample"), QStringLiteral("frag")));
     if (!m_upsamplePass.shader) {
         qCWarning(KWIN_BLUR) << "Failed to load upsampling pass shader";
         return;
@@ -217,12 +224,17 @@ BlurEffect::BlurEffect()
 
     // Noise pass (grain over the blurred result)
     m_noisePass.shader = ShaderManager::instance()->generateShaderFromFile(
-        ShaderTrait::MapTexture, QStringLiteral(":/effects/liquidglass/shaders/vertex.vert"), QStringLiteral(":/effects/liquidglass/shaders/noise.frag"));
+        ShaderTrait::MapTexture, shaderPath(QStringLiteral("glass"), QStringLiteral("vert")), shaderPath(QStringLiteral("noise"), QStringLiteral("frag")));
     if (!m_noisePass.shader) {
         qCWarning(KWIN_BLUR) << "Failed to load noise pass shader";
         return;
     } else {
         m_noisePass.mvpMatrixLocation = m_noisePass.shader->uniformLocation("modelViewProjectionMatrix");
+        m_noisePass.boxLocation = m_noisePass.shader->uniformLocation("box");
+        m_noisePass.blurSizeLocation = m_noisePass.shader->uniformLocation("blurSize");
+        m_noisePass.cornerRadiusLocation = m_noisePass.shader->uniformLocation("cornerRadius");
+        m_noisePass.cornerSquircleLocation = m_noisePass.shader->uniformLocation("cornerSquircle");
+        m_noisePass.opacityLocation = m_noisePass.shader->uniformLocation("opacity");
         m_noisePass.noiseTextureSizeLocation = m_noisePass.shader->uniformLocation("noiseTextureSize");
     }
 
@@ -401,7 +413,7 @@ void BlurEffect::reconfigure(ReconfigureFlags flags)
 
     // Per-pass tuning knobs.
     m_noiseStrength = BlurConfig::noiseStrength();
-    m_colorMatrix = QMatrix4x4(); // identity — no color transform
+    m_colorMatrix = colorTransformMatrix(BlurConfig::saturation(), BlurConfig::contrast(), BlurConfig::brightness());
     m_rgbDriftStrength = static_cast<float>(BlurConfig::rgbDriftStrength());
     m_magnifyGlassStrength = static_cast<float>(BlurConfig::magnifyGlassStrength());
     m_refractionWidth = static_cast<float>(BlurConfig::refractionWidth());
@@ -470,29 +482,34 @@ void BlurEffect::updateBlurRegion(EffectWindow* w)
     std::optional<qreal> saturation;
     std::optional<qreal> contrast;
 
-    // X11: read the _KDE_NET_WM_BLUR_BEHIND_REGION cardinal array.
-    // Layout is repeating (x, y, w, h) tuples of 32-bit cardinals.
-    // EffectWindow::readProperty() was removed from the Wayland build in
-    // 6.7, so this client-property path only compiles where it still
-    // exists: any pre-6.7 build, or a dedicated X11 (GLASS_X11) target.
-#if KWIN_BUILD_X11 && (!ACRYLIC_GLASS_KWIN_6_7 || defined(GLASS_X11))
-    if (net_wm_blur_region != XCB_ATOM_NONE) {
-        const QByteArray value = w->readProperty(net_wm_blur_region, XCB_ATOM_CARDINAL, 32);
-        Region region;
-
-        if (value.size() > 0 && !(value.size() % (4 * sizeof(uint32_t)))) {
-            const uint32_t* cardinals = reinterpret_cast<const uint32_t*>(value.constData());
-            for (unsigned int i = 0; i < value.size() / sizeof(uint32_t);) {
-                int x = cardinals[i++];
-                int y = cardinals[i++];
-                int w = cardinals[i++];
-                int h = cardinals[i++];
-                region += Xcb::fromXNative(Rect(x, y, w, h)).toRect();
+    // Xwayland still advertises blur through the X11 property on KWin 6.7+,
+    // even though EffectWindow::readProperty was removed from that SDK.
+#if KWIN_BUILD_X11
+    if (net_wm_blur_region != XCB_ATOM_NONE && effects->xcbConnection() && w->windowId()) {
+        // Bound the response and reject malformed/truncated properties instead
+        // of treating them as the empty "blur the entire window" request.
+        const auto cookie = xcb_get_property(effects->xcbConnection(), false,
+            xcb_window_t(w->windowId()), net_wm_blur_region, XCB_ATOM_CARDINAL, 0, 16384);
+        const std::unique_ptr<xcb_get_property_reply_t, decltype(&std::free)> reply(
+            xcb_get_property_reply(effects->xcbConnection(), cookie, nullptr), &std::free);
+        if (reply && reply->type == XCB_ATOM_CARDINAL && reply->format == 32
+            && reply->bytes_after == 0 && reply->value_len % 4 == 0) {
+            Region region;
+            const auto *cardinals = static_cast<const uint32_t *>(xcb_get_property_value(reply.get()));
+            for (uint32_t i = 0; i < reply->value_len; i += 4) {
+                const int x = int32_t(cardinals[i]);
+                const int y = int32_t(cardinals[i + 1]);
+                const uint32_t width = cardinals[i + 2];
+                const uint32_t height = cardinals[i + 3];
+                if (width > INT_MAX || height > INT_MAX
+                    || int64_t(x) + width > INT_MAX || int64_t(y) + height > INT_MAX) {
+                    region = Region();
+                    break;
+                }
+                region += Xcb::fromXNative(Rect(x, y, int(width), int(height))).toRect();
             }
-        }
-
-        if (!value.isNull()) {
-            content = region;
+            // Invalid sizes must not authorize a full-window fallback.
+            if (reply->value_len == 0 || !region.isEmpty()) content = region;
         }
     }
 #endif
@@ -539,9 +556,7 @@ void BlurEffect::updateBlurRegion(EffectWindow* w)
     // own opaque chrome doesn't double-blur).
     if (m_blurDecorations && w->decorationHasAlpha() && decorationSupportsBlurBehind(w)) {
         frame = decorationBlurRegion(w);
-    }
-
-    if (m_blurDecorations && !(w->isDock() || w->isMenu() || w->isDropdownMenu() || w->isPopupMenu() || w->isPopupWindow())) {
+    } else if (m_blurDecorations && !(w->isDock() || w->isTooltip() || w->isMenu() || w->isDropdownMenu() || w->isPopupMenu() || w->isPopupWindow())) {
         frame = Rect(w->frameGeometry().translated(-w->x(), -w->y()).toRect());
     }
 
@@ -743,8 +758,10 @@ Region BlurEffect::blurRegion(EffectWindow* w) const
             if (content->isEmpty()) {
                 // Empty optional → "blur everything inside the content rect".
                 region = Rect(w->contentsRect().toRect());
-            } else {
+            } else if (w->decoration()) {
                 region = content->translated(w->contentsRect().topLeft().toPoint()) & w->contentsRect().toRect();
+            } else {
+                region = *content & w->contentsRect().toRect();
             }
 
             if (frame.has_value()) {
@@ -843,6 +860,17 @@ bool BlurEffect::shouldBlur(const EffectWindow* w, int mask, const WindowPaintDa
     const auto windowClass = w->window()->resourceClass();
     const auto resourceName = w->window()->resourceName();
 
+    // VirtualBox's VM surface carries the guest's fullscreen/seamless
+    // content and transparent cutouts. Painting forced glass behind it
+    // fills those cutouts with a desktop-sized sheet (issue #90). Keep
+    // this outside the configurable match modes so existing installs
+    // and custom lists are protected too. The VirtualBox manager has a
+    // different class and keeps its normal appearance.
+    if (windowClass.compare(QStringLiteral("VirtualBoxVM"), Qt::CaseInsensitive) == 0
+        || resourceName.compare(QStringLiteral("VirtualBoxVM"), Qt::CaseInsensitive) == 0) {
+        return false;
+    }
+
     // xwaylandvideobridge is the helper that bridges Wayland windows into
     // XWayland for screen sharing (Discord / OBS / browser capture). It
     // maps an invisible, screen-sized surface that must never be blurred —
@@ -889,7 +917,7 @@ bool BlurEffect::shouldBlur(const EffectWindow* w, int mask, const WindowPaintDa
 /// Delegate to ``blur()`` (which handles its own shouldBlur gate
 /// internally), then defer to KWin's default to draw the actual window
 /// content on top of the blurred background.
-ACRYLIC_GLASS_DRAW_WINDOW_RETURN BlurEffect::drawWindow(
+AcrylicGlassDrawWindowResult BlurEffect::drawWindow(
     const RenderTarget& renderTarget, const RenderViewport& viewport, EffectWindow* w, int mask, const Region& deviceRegion, WindowPaintData& data)
 {
     blur(renderTarget, viewport, w, mask, deviceRegion, data);
@@ -997,8 +1025,8 @@ void BlurEffect::blur(
     }
 
     const QRect backgroundRect = blurShape.boundingRect();
-    const QRect scaledBackgroundRect = snapToDeviceRect(scaledRect(backgroundRect, viewport.scale()));
-    const QRect deviceBackgroundRect = snapToDeviceRect(viewport.mapToDeviceCoordinates(backgroundRect));
+    const QRect scaledBackgroundRect = agSnapToPixelGrid(scaledRect(backgroundRect, viewport.scale()));
+    const QRect deviceBackgroundRect = agSnapToPixelGrid(viewport.mapToDeviceCoordinates(backgroundRect));
     const auto opacity = data.opacity();
 
     // Intersect the shape with the deviceRegion clip — empty after the
@@ -1084,7 +1112,7 @@ void BlurEffect::blur(
     // so map dirtyRect through viewport.scale() before translating.
     const Region dirtyRegion = viewport.mapFromDeviceCoordinatesContained(deviceRegion) & backgroundRect;
     for (const Rect& dirtyRect : dirtyRegion.rects()) {
-        const QRect deviceDirtyRect = snapToDeviceRect(scaledRect(QRectF(dirtyRect), viewport.scale()));
+        const QRect deviceDirtyRect = agSnapToPixelGrid(scaledRect(QRectF(dirtyRect), viewport.scale()));
         renderInfo.framebuffers[0]->blitFromRenderTarget(renderTarget, viewport, dirtyRect, deviceDirtyRect.translated(-scaledBackgroundRect.topLeft()));
     }
 
@@ -1200,6 +1228,9 @@ void BlurEffect::blur(
     // At zero offset the final onscreen pass reads from framebuffers[0] (the
     // unblurred original) directly, so the Kawase chain is wasted GPU work.
     if (m_offset > 0.0f) {
+        // Intermediate passes replace their target; inherited blending
+        // would accumulate stale translucent pixels on subsequent frames.
+        glDisable(GL_BLEND);
         // The downsample pass of the dual Kawase algorithm: the background will be scaled down 50% every iteration.
         {
             ShaderManager::instance()->pushShader(m_downsamplePass.shader.get());
@@ -1296,6 +1327,18 @@ void BlurEffect::blur(
         }
     }
 
+    // ShapeCorners publishes its animated geometry during prePaintWindow.
+    // Follow the actual cutout, including inactive/maximized/excluded states,
+    // without changing either effect's saved preferences (#89).
+    float cornerSquircle = 0.0f;
+    const auto shape = w->property("_mttkde_corner_shape_v1").toList();
+    if (shape.size() == 2) {
+        topCornerRadius = bottomCornerRadius = std::max(0.0f, shape[0].toFloat());
+        cornerSquircle = std::clamp(shape[1].toFloat(), 0.0f, 1.0f);
+        cornerRadius = BorderRadius(topCornerRadius, topCornerRadius,
+                                    bottomCornerRadius, bottomCornerRadius);
+    }
+
     // Clamp the radius for narrow / short windows so the SDF doesn't
     // wrap around onto itself when r > half-dimension.
     if (topCornerRadius > 0 || bottomCornerRadius > 0) {
@@ -1345,7 +1388,7 @@ void BlurEffect::blur(
     // Floor to integer device pixels so the SDF rounded corners are always
     // pixel-aligned — prevents subpixel border artifacts that shift with
     // window position.
-    const QRectF nativeBoxF = snapToDeviceRectF(scaledRect(transformedRect, viewport.scale())).translated(-scaledBackgroundRect.topLeft());
+    const QRectF nativeBoxF = agSnapToPixelGridF(scaledRect(transformedRect, viewport.scale())).translated(-scaledBackgroundRect.topLeft());
     const QRectF nativeBox(std::floor(nativeBoxF.x()), std::floor(nativeBoxF.y()), std::floor(nativeBoxF.width()), std::floor(nativeBoxF.height()));
     const BorderRadius nativeCornerRadius = cornerRadius.scaled(viewport.scale()).rounded();
 
@@ -1361,6 +1404,7 @@ void BlurEffect::blur(
     m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.boxLocation,
         QVector4D(nativeBox.x() + nativeBox.width() * 0.5, nativeBox.y() + nativeBox.height() * 0.5, nativeBox.width() * 0.5, nativeBox.height() * 0.5));
 
+    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.cornerSquircleLocation, cornerSquircle);
     m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.cornerRadiusLocation, nativeCornerRadius.toVector());
     m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.opacityLocation, modulation);
     m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.blurSizeLocation, QVector2D(nativeBox.width(), nativeBox.height()));
@@ -1388,11 +1432,7 @@ void BlurEffect::blur(
         // that show up in smooth gradients after heavy blur.
 
         glEnable(GL_BLEND);
-        if (opacity < 1.0) {
-            glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE);
-        } else {
-            glBlendFunc(GL_ONE, GL_ONE);
-        }
+        glBlendFunc(GL_ONE, GL_ONE);
 
         if (GLTexture* noiseTexture = ensureNoiseTexture()) {
             ShaderManager::instance()->pushShader(m_noisePass.shader.get());
@@ -1403,6 +1443,11 @@ void BlurEffect::blur(
             m_noisePass.shader->setUniform(m_noisePass.mvpMatrixLocation, projectionMatrix);
             m_noisePass.shader->setUniform(m_noisePass.noiseTextureSizeLocation, QVector2D(noiseTexture->width(), noiseTexture->height()));
 
+            m_noisePass.shader->setUniform(m_noisePass.boxLocation, QVector4D(nativeBox.center().x(), nativeBox.center().y(), nativeBox.width() * 0.5, nativeBox.height() * 0.5));
+            m_noisePass.shader->setUniform(m_noisePass.blurSizeLocation, QVector2D(nativeBox.width(), nativeBox.height()));
+            m_noisePass.shader->setUniform(m_noisePass.cornerRadiusLocation, nativeCornerRadius.toVector());
+            m_noisePass.shader->setUniform(m_noisePass.cornerSquircleLocation, cornerSquircle);
+            m_noisePass.shader->setUniform(m_noisePass.opacityLocation, modulation);
             noiseTexture->bind();
 
             vbo->draw(GL_TRIANGLES, 6, vertexCount);

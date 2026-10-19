@@ -146,7 +146,7 @@ public:
     /// The main entry point — KWin asks us to paint window ``w``; we
     /// either delegate to ``blur()`` (when blur is wanted) or fall back
     /// to the default opaque draw.
-    ACRYLIC_GLASS_DRAW_WINDOW_RETURN drawWindow(const RenderTarget& renderTarget, const RenderViewport& viewport, EffectWindow* w, int mask, const Region& deviceRegion,
+    AcrylicGlassDrawWindowResult drawWindow(const RenderTarget& renderTarget, const RenderViewport& viewport, EffectWindow* w, int mask, const Region& deviceRegion,
         WindowPaintData& data) override;
 
     /// Tells KWin we provide the ``Blur`` Feature — kcm/effects UI
@@ -258,6 +258,7 @@ private:
         int halfpixelLocation;
         int boxLocation;
         int cornerRadiusLocation;
+        int cornerSquircleLocation;
         int opacityLocation;
 
         int blurSizeLocation;
@@ -294,6 +295,11 @@ private:
         std::unique_ptr<GLShader> shader;
         int mvpMatrixLocation;
         int noiseTextureSizeLocation;
+        int boxLocation;
+        int blurSizeLocation;
+        int cornerRadiusLocation;
+        int cornerSquircleLocation;
+        int opacityLocation;
 
         std::unique_ptr<GLTexture> noiseTexture;
         qreal noiseTextureScale = 1.0;

@@ -45,18 +45,6 @@
 #define ACRYLIC_GLASS_KWIN_6_7 0
 #endif
 
-#ifdef GLASS_KWIN_68
-#define ACRYLIC_GLASS_KWIN_6_8 1
-#else
-#define ACRYLIC_GLASS_KWIN_6_8 0
-#endif
-
-#if ACRYLIC_GLASS_KWIN_6_8
-#define ACRYLIC_GLASS_DRAW_WINDOW_RETURN bool
-#else
-#define ACRYLIC_GLASS_DRAW_WINDOW_RETURN void
-#endif
-
 #if ACRYLIC_GLASS_KWIN_6_7
 /// Paint methods take no trailing presentTime on 6.7+ — expands to nothing.
 #define ACRYLIC_GLASS_PRESENT_TIME_PARAM
@@ -66,4 +54,14 @@
 /// 6.6 and earlier: the methods carry an explicit presentTime parameter.
 #define ACRYLIC_GLASS_PRESENT_TIME_PARAM , std::chrono::milliseconds presentTime
 #define ACRYLIC_GLASS_PRESENT_TIME_ARG , presentTime
+#endif
+
+/// 6.8 changed Effect::drawWindow() to return bool ([[nodiscard]]):
+/// true when the window was actually painted.
+#ifdef GLASS_KWIN_68
+#define ACRYLIC_GLASS_KWIN_6_8 1
+using AcrylicGlassDrawWindowResult = bool;
+#else
+#define ACRYLIC_GLASS_KWIN_6_8 0
+using AcrylicGlassDrawWindowResult = void;
 #endif

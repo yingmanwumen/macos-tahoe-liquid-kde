@@ -9,7 +9,7 @@ set(LIQUIDGLASS_SHADER_INCLUDES
     highlight.glsl
 )
 
-# Everything liquidglass.qrc references except the two preprocessed
+# Everything liquidglass.qrc references except the four preprocessed
 # .frag outputs generated below.
 set(LIQUIDGLASS_SHADER_STATIC
     blur.glsl
@@ -19,8 +19,6 @@ set(LIQUIDGLASS_SHADER_STATIC
     glass.vert
     glass_core.vert
     highlight.glsl
-    noise.frag
-    noise_core.frag
     sdf.glsl
     upsample.frag
     upsample_core.frag
@@ -42,6 +40,8 @@ endfunction()
 
 preprocess_shader_includes(shaders/glass.glsl shaders/glass.frag)
 preprocess_shader_includes(shaders/glass_core.glsl shaders/glass_core.frag)
+preprocess_shader_includes(shaders/noise.frag shaders/noise.frag)
+preprocess_shader_includes(shaders/noise_core.frag shaders/noise_core.frag)
 
 foreach(shader_file IN LISTS LIQUIDGLASS_SHADER_STATIC)
     configure_file("shaders/${shader_file}"
@@ -66,6 +66,7 @@ if(GLASS_WAYLAND)
         KDecoration3::KDecoration
         KF6::ConfigGui
         KWin::kwin
+        XCB::XCB
     )
     # GLASS_KWIN_67 drives the 6.6-vs-6.7 ABI gating in kwin_version_compat.h.
     if(GLASS_KWIN_67_WAYLAND)
