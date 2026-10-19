@@ -66,12 +66,35 @@ namespace KWin {
 
 #if ACRYLIC_GLASS_KWIN_6_7
 /// 6.7 removed the global scaledRect() helper (it lived in
-/// effect/globals.h pre-6.7). Re-provide it verbatim so the three call
-/// sites below stay version-agnostic; snapToPixelGrid* are still in the
-/// KWin headers.
+/// effect/globals.h pre-6.7). Re-provide it verbatim so the call sites
+/// below stay version-agnostic.
 inline QRectF scaledRect(const QRectF& rect, qreal scale)
 {
     return QRectF{rect.x() * scale, rect.y() * scale, rect.width() * scale, rect.height() * scale};
+}
+
+// KWin 6.8 removed snapToPixelGrid()/snapToPixelGridF() in favour of the
+// lower-level snapToPixels() overloads. These call sites already operate on
+// device-pixel coordinates, so toAlignedRect() preserves the old behavior:
+// round the outer bounds to an integer device-pixel rectangle.
+inline QRect snapToDeviceRect(const QRectF& rect)
+{
+    return rect.toAlignedRect();
+}
+
+inline QRectF snapToDeviceRectF(const QRectF& rect)
+{
+    return QRectF(std::round(rect.left()), std::round(rect.top()), std::round(rect.width()), std::round(rect.height()));
+}
+#else
+inline QRect snapToDeviceRect(const QRectF& rect)
+{
+    return snapToPixelGrid(rect);
+}
+
+inline QRectF snapToDeviceRectF(const QRectF& rect)
+{
+    return snapToPixelGridF(rect);
 }
 #endif
 
@@ -866,12 +889,16 @@ bool BlurEffect::shouldBlur(const EffectWindow* w, int mask, const WindowPaintDa
 /// Delegate to ``blur()`` (which handles its own shouldBlur gate
 /// internally), then defer to KWin's default to draw the actual window
 /// content on top of the blurred background.
-void BlurEffect::drawWindow(
+ACRYLIC_GLASS_DRAW_WINDOW_RETURN BlurEffect::drawWindow(
     const RenderTarget& renderTarget, const RenderViewport& viewport, EffectWindow* w, int mask, const Region& deviceRegion, WindowPaintData& data)
 {
     blur(renderTarget, viewport, w, mask, deviceRegion, data);
 
+#if ACRYLIC_GLASS_KWIN_6_8
+    return effects->drawWindow(renderTarget, viewport, w, mask, deviceRegion, data);
+#else
     effects->drawWindow(renderTarget, viewport, w, mask, deviceRegion, data);
+#endif
 }
 
 // Noise grain texture
@@ -970,8 +997,8 @@ void BlurEffect::blur(
     }
 
     const QRect backgroundRect = blurShape.boundingRect();
-    const QRect scaledBackgroundRect = snapToPixelGrid(scaledRect(backgroundRect, viewport.scale()));
-    const QRect deviceBackgroundRect = snapToPixelGrid(viewport.mapToDeviceCoordinates(backgroundRect));
+    const QRect scaledBackgroundRect = snapToDeviceRect(scaledRect(backgroundRect, viewport.scale()));
+    const QRect deviceBackgroundRect = snapToDeviceRect(viewport.mapToDeviceCoordinates(backgroundRect));
     const auto opacity = data.opacity();
 
     // Intersect the shape with the deviceRegion clip — empty after the
@@ -1057,7 +1084,7 @@ void BlurEffect::blur(
     // so map dirtyRect through viewport.scale() before translating.
     const Region dirtyRegion = viewport.mapFromDeviceCoordinatesContained(deviceRegion) & backgroundRect;
     for (const Rect& dirtyRect : dirtyRegion.rects()) {
-        const QRect deviceDirtyRect = snapToPixelGrid(scaledRect(QRectF(dirtyRect), viewport.scale()));
+        const QRect deviceDirtyRect = snapToDeviceRect(scaledRect(QRectF(dirtyRect), viewport.scale()));
         renderInfo.framebuffers[0]->blitFromRenderTarget(renderTarget, viewport, dirtyRect, deviceDirtyRect.translated(-scaledBackgroundRect.topLeft()));
     }
 
@@ -1318,7 +1345,7 @@ void BlurEffect::blur(
     // Floor to integer device pixels so the SDF rounded corners are always
     // pixel-aligned — prevents subpixel border artifacts that shift with
     // window position.
-    const QRectF nativeBoxF = snapToPixelGridF(scaledRect(transformedRect, viewport.scale())).translated(-scaledBackgroundRect.topLeft());
+    const QRectF nativeBoxF = snapToDeviceRectF(scaledRect(transformedRect, viewport.scale())).translated(-scaledBackgroundRect.topLeft());
     const QRectF nativeBox(std::floor(nativeBoxF.x()), std::floor(nativeBoxF.y()), std::floor(nativeBoxF.width()), std::floor(nativeBoxF.height()));
     const BorderRadius nativeCornerRadius = cornerRadius.scaled(viewport.scale()).rounded();
 

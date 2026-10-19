@@ -25,5 +25,5 @@
   "kconf_update":       true,
   "oled_interval":      5,
   "oled_max_shift":     8,
-  "theme_mode":         "auto"
+  "theme_mode":         "light"
 }
