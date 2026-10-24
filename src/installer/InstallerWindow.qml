@@ -29,15 +29,6 @@ Window {
     property string viewMode: "main"
     property string currentAction: ""
 
-    // ── update banner state ──────────────────────────────────────────────
-    // Populated by installer.checkForUpdates() → onUpdateChecked. The
-    // banner stays hidden unless GitHub reports a strictly newer release,
-    // mirroring the CLI's `./install --check-update` verdict. Network
-    // failures (and the MAC_TAHOE_NO_UPDATE_CHECK opt-out) leave
-    // updateAvailable false, so the banner simply never appears.
-    property bool updateAvailable: false
-    property string updateCurrent: ""
-    property string updateLatest: ""
     property bool logoAnimating: true
 
     readonly property bool busy: viewMode === "installing"
@@ -62,10 +53,6 @@ Window {
         const s = Screen;
         x = Math.round((s.width - width) / 2);
         y = Math.round((s.height - height) / 2);
-        // Fire the GitHub round-trip once, off the GUI thread. The verdict
-        // lands later via onUpdateChecked; nothing blocks the first paint.
-        if (installer)
-            installer.checkForUpdates();
     }
 
     function _localPath(url: url): string {
@@ -96,11 +83,6 @@ Window {
                                  installerWindow.currentAction);
                 installerWindow.viewMode = "main";
             }
-        }
-        function onUpdateChecked(status) {
-            installerWindow.updateCurrent = status.current || "";
-            installerWindow.updateLatest = status.latest || "";
-            installerWindow.updateAvailable = status.available === true;
         }
     }
 
@@ -247,73 +229,6 @@ Window {
             visible: installerWindow.viewMode === "main"
 
             Item { Layout.fillHeight: true }
-
-            // ── update banner ─────────────────────────────────────────────
-            // A quiet macOS-style pill that fades in only when GitHub has a
-            // strictly newer release. Same verdict and copy as the CLI's
-            // `./install --check-update`. Clicking it copies the upgrade
-            // command; the user still upgrades via git pull && ./install.
-            Rectangle {
-                id: updateBanner
-                Layout.alignment: Qt.AlignHCenter
-                Layout.bottomMargin: 14
-                visible: installerWindow.updateAvailable
-                implicitWidth: updateRow.implicitWidth + 32
-                implicitHeight: 34
-                radius: height / 2
-                color: installerWindow.isDarkTheme
-                    ? Qt.rgba(0.0, 0.48, 1.0, 0.18)
-                    : Qt.rgba(0.0, 0.48, 1.0, 0.12)
-                border.width: 1
-                border.color: Qt.rgba(0.0, 0.48, 1.0, 0.35)
-
-                Row {
-                    id: updateRow
-                    anchors.centerIn: parent
-                    spacing: 8
-
-                    Kirigami.Icon {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 16
-                        height: 16
-                        source: "arrow-up"
-                        color: "#007AFF"
-                    }
-
-                    Text {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "Update available: " + installerWindow.updateCurrent
-                            + " → " + installerWindow.updateLatest
-                            + "   ·   run git pull && ./install"
-                        color: Kirigami.Theme.textColor
-                        font.family: installerWindow.fontFamily
-                        font.pointSize: Kirigami.Theme.defaultFont.pointSize * 0.95
-                        font.weight: Font.DemiBold
-                    }
-                }
-
-                HoverHandler {
-                    cursorShape: Qt.PointingHandCursor
-                    enabled: !installerWindow.busy
-                }
-                TapHandler {
-                    enabled: !installerWindow.busy
-                    onTapped: {
-                        updateClipboard.text = "git pull && ./install";
-                        updateClipboard.selectAll();
-                        updateClipboard.copy();
-                        updateClipboard.deselect();
-                    }
-                }
-
-                // Off-screen TextEdit, used only as a clipboard via copy().
-                TextEdit {
-                    id: updateClipboard
-                    visible: false
-                    width: 0
-                    height: 0
-                }
-            }
 
             // ── logo area (Canvas 2D stroke-dasharray → crossfade to PNG) ──
             // Qt's Image can't play SMIL animations, and ShapePath doesn't

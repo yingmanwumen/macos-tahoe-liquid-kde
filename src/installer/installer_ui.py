@@ -19,10 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from paths import CONFIG_FILE, REPO_ROOT, read_version
-from cli import (
-    ALL_FEATURES, DEFAULT_FEATURES, FEATURE_DESC,
-    fetch_latest_release, parse_semver,
-)
+from cli import ALL_FEATURES, DEFAULT_FEATURES, FEATURE_DESC
 from log import DONE_MARKER, PROGRESS_FILE
 
 
@@ -219,27 +216,11 @@ def _enable_kwin_blur(window) -> None:
 
 def _make_installer_bridge():
     from PyQt6.QtCore import (
-        QFileSystemWatcher, QObject, QProcess, QThread, QTimer,
+        QFileSystemWatcher, QObject, QProcess, QTimer,
         pyqtProperty, pyqtSignal, pyqtSlot,
     )
 
     _ESTIMATED_TOTAL_STEPS = 25
-
-    class _UpdateCheckThread(QThread):
-        """Runs the blocking GitHub round-trip off the GUI thread; the
-        cross-thread ``done`` emit is marshalled back onto the GUI thread."""
-
-        done = pyqtSignal("QVariantMap")
-
-        def run(self) -> None:
-            try:
-                self.done.emit(update_status())
-            except Exception:
-                # Never let a worker-thread exception escape into Qt.
-                self.done.emit({
-                    "current": read_version(), "latest": "",
-                    "available": False, "reachable": False,
-                })
 
     class InstallerBridge(QObject):
         currentStepChanged = pyqtSignal()
@@ -247,7 +228,6 @@ def _make_installer_bridge():
         runningChanged = pyqtSignal()
         finished = pyqtSignal(int)
         logAppended = pyqtSignal(str)
-        updateChecked = pyqtSignal("QVariantMap")
 
         def __init__(self, parent=None):
             super().__init__(parent)
@@ -260,7 +240,6 @@ def _make_installer_bridge():
             self._read_offset = 0
             self._line_buf = ""
             self._exit_code: int | None = None
-            self._update_thread: _UpdateCheckThread | None = None
 
             self._watcher = QFileSystemWatcher(self)
             self._watcher.fileChanged.connect(self._read_progress)
@@ -328,18 +307,6 @@ def _make_installer_bridge():
         def cancel(self) -> None:
             if self._proc and self._proc.state() != QProcess.ProcessState.NotRunning:
                 self._proc.kill()
-
-        @pyqtSlot()
-        def checkForUpdates(self) -> None:
-            """One-shot background update check; verdict via ``updateChecked``.
-            Re-entrant calls are ignored so a double-call can't spawn two threads."""
-            if self._update_thread is not None and self._update_thread.isRunning():
-                return
-            thread = _UpdateCheckThread(self)
-            thread.done.connect(self.updateChecked)
-            thread.finished.connect(thread.deleteLater)
-            self._update_thread = thread
-            thread.start()
 
         def _read_progress(self) -> None:
             try:
@@ -512,28 +479,6 @@ def save_features(payload: dict[str, object]) -> dict[str, object]:
     return {"ok": True, "message": f"Saved to {CONFIG_FILE.name}"}
 
 
-def update_status() -> dict[str, object]:
-    """Mirror the CLI's ``--check-update`` verdict via the same engine
-    pieces so GUI and CLI never disagree. Network failures and the
-    MAC_TAHOE_NO_UPDATE_CHECK opt-out resolve to ``reachable=False``
-    rather than raising — a flaky GitHub must never break the window."""
-    current = read_version()
-    latest = fetch_latest_release()
-    if latest is None:
-        return {
-            "current": current,
-            "latest": "",
-            "available": False,
-            "reachable": False,
-        }
-    return {
-        "current": current,
-        "latest": latest,
-        "available": parse_semver(latest) > parse_semver(current),
-        "reachable": True,
-    }
-
-
 def main(argv: list[str]) -> int:
     rc = drop_root_to_invoking_user()
     if rc != 0:
@@ -558,11 +503,6 @@ def main(argv: list[str]) -> int:
         metavar="JSON",
         help="Persist a JSON object of {feature: bool} into features.json.",
     )
-    parser.add_argument(
-        "--check-update",
-        action="store_true",
-        help="Print the update verdict as JSON (for the update banner).",
-    )
     args = parser.parse_args(argv)
 
     if args.launch:
@@ -572,10 +512,6 @@ def main(argv: list[str]) -> int:
 
     if args.dump_features:
         print(json.dumps(dump_features(), ensure_ascii=False))
-        return 0
-
-    if args.check_update:
-        print(json.dumps(update_status(), ensure_ascii=False))
         return 0
 
     if args.save_features is not None:

@@ -119,7 +119,6 @@ Options:
   Persistence:
     --save             Save current flags to features.json
     --reset            Reset features.json to all-true defaults
-    --check-update     Check GitHub for a newer release and exit
     --preflight        Run preflight checks (sudo, paths, Qt6, IDs) and exit
     --restart          Restart Plasma shell. Standalone (no other flags)
                        skips install entirely; combined with --only or
@@ -132,7 +131,6 @@ Examples:
   ./install --only --fonts --icons       # install only fonts and icons
   ./install --dark --save                # dark mode, remember setting
   ./install --reset                      # restore defaults
-  ./install --check-update               # see if a newer release is out
   ./install --restart                    # just kick plasmashell, don't reinstall
 """
 
@@ -219,7 +217,6 @@ class ParsedArgs:
         self.do_save = False
         self.do_reset = False
         self.only_mode = False
-        self.check_update = False
         self.preflight_only = False
         self.restart_only = False
         self.cli_overrides: dict[str, bool] = {}
@@ -265,8 +262,6 @@ def parse_args(argv: list[str]) -> ParsedArgs:
             p.do_save = True
         elif arg == "--reset":
             p.do_reset = True
-        elif arg == "--check-update":
-            p.check_update = True
         elif arg == "--preflight":
             p.preflight_only = True
         elif arg == "--restart":
@@ -284,160 +279,6 @@ def parse_args(argv: list[str]) -> ParsedArgs:
             if key in ALL_FEATURES:
                 p.cli_overrides[key] = True
     return p
-
-
-# ── version checker ─────────────────────────────────────────────────────
-GITHUB_RELEASES_URL = (
-    "https://api.github.com/repos/"
-    "lestercorderomurillo/macos-tahoe-liquid-kde/releases/latest"
-)
-
-
-def parse_semver(version: str) -> tuple[int, int, int]:
-    """Permissive semver tuple. Returns ``(0, 0, 0)`` on garbage rather
-    than raising — a bad release tag must never block the installer."""
-    if not version:
-        return (0, 0, 0)
-    s = version.strip().lstrip("vV").split("-", 1)[0].split("+", 1)[0]
-    parts = s.split(".")
-    out: list[int] = []
-    for p in parts[:3]:
-        try:
-            out.append(int(p))
-        except ValueError:
-            out.append(0)
-    while len(out) < 3:
-        out.append(0)
-    return (out[0], out[1], out[2])
-
-
-def fetch_latest_release(timeout: float = 2.5) -> str | None:
-    """Latest release tag (bare version string) from GitHub, or ``None``
-    if anything goes wrong — offline, rate-limited, JSON shape changed."""
-    if os.environ.get("MAC_TAHOE_NO_UPDATE_CHECK", "").lower() == "true":
-        return None
-    try:
-        import urllib.request
-        req = urllib.request.Request(
-            GITHUB_RELEASES_URL,
-            headers={"Accept": "application/vnd.github+json",
-                     "User-Agent": "mac-tahoe-liquid-kde-installer"},
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = json.loads(r.read().decode("utf-8"))
-    except Exception:
-        return None
-    tag = data.get("tag_name")
-    return tag.lstrip("vV") if isinstance(tag, str) else None
-
-
-_CLEAR_LINE = "\r\033[2K"
-_VERSION_CHECK_READ_PAUSE = 2.0
-
-
-def check_for_updates(verbose: bool = False, inline: bool = False) -> bool:
-    """Print an upgrade banner when GitHub has a newer release; True if so.
-    ``inline`` overwrites a transient status line in place and pauses ~2s so
-    the verdict registers before install output scrolls it away; ``verbose``
-    (standalone --check-update) always announces, without the pause."""
-    if inline:
-        # confirm() already trails a blank line.
-        print("  \033[2mChecking for updates…\033[0m", end="", flush=True)
-
-    current = read_version()
-    latest = fetch_latest_release()
-
-    if inline:
-        print(_CLEAR_LINE, end="", flush=True)
-
-    if latest is None:
-        if verbose or inline:
-            print("  \033[2mCould not reach GitHub — skipping update check\033[0m")
-        if inline:
-            time.sleep(_VERSION_CHECK_READ_PAUSE)
-        return False
-    if parse_semver(latest) > parse_semver(current):
-        print(f"  \033[1;33mUpdate available: {current} → {latest}\033[0m")
-        print(f"  \033[2mUpdates fix style breakage when KDE / Plasma /"
-              f" Kvantum upstream changes\033[0m")
-        print(f"  \033[2mbreak our overrides, plus crash fixes for"
-              f" custom plasmoids.\033[0m")
-        print(f"  \033[2mRun: git pull && ./install\033[0m")
-        if inline:
-            time.sleep(_VERSION_CHECK_READ_PAUSE)
-        return True
-    if verbose or inline:
-        # Match ok() formatting exactly.
-        print(f"  \033[0;32m✓\033[0m  On the latest version ({current})")
-    if inline:
-        time.sleep(_VERSION_CHECK_READ_PAUSE)
-    return False
-
-
-def _git(*args: str, capture: bool = False):
-    """Run git in the repo as the invoking user — pulling as root would leave
-    root-owned objects. Returns the CompletedProcess, or None on failure."""
-    if not have("git"):
-        return None
-    try:
-        return run_user(
-            ["git", "-C", str(REPO_ROOT), *args],
-            check=False,
-            capture_output=capture,
-            text=True,
-            timeout=120,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-
-
-def _repo_is_clean_git_checkout() -> bool:
-    """True only when REPO_ROOT is a git working tree with no uncommitted
-    changes — never auto-pull over local edits."""
-    if not (REPO_ROOT / ".git").exists():
-        return False
-    inside = _git("rev-parse", "--is-inside-work-tree", capture=True)
-    if inside is None or inside.returncode != 0 or inside.stdout.strip() != "true":
-        return False
-    status = _git("status", "--porcelain", capture=True)
-    if status is None or status.returncode != 0:
-        return False
-    return status.stdout.strip() == ""
-
-
-def auto_update_and_reexec(argv: list[str], prog: str = "install") -> None:
-    """Pull the newer release and re-exec ``./install`` — a git pull can't
-    upgrade the already-loaded installer. ``MAC_TAHOE_UPDATED`` guards against
-    a pull/re-exec loop; every bail falls through to installing the current
-    version with a one-line reason and the manual command."""
-    if os.environ.get("MAC_TAHOE_UPDATED") == "1":
-        return  # already re-exec'd after a successful pull; just install
-
-    if not _repo_is_clean_git_checkout():
-        note("Not a clean git checkout — skipping auto-update")
-        print(f"  \033[2mUpdate manually: git pull && ./{prog}\033[0m")
-        return
-
-    print("  \033[2mPulling the latest release…\033[0m")
-    pull = _git("pull", "--ff-only", capture=True)
-    if pull is None or pull.returncode != 0:
-        warn("git pull failed — installing the current version")
-        if pull is not None and pull.stderr:
-            print(f"  \033[2m{pull.stderr.strip().splitlines()[-1]}\033[0m")
-        print(f"  \033[2mUpdate manually: git pull && ./{prog}\033[0m")
-        return
-
-    ok(f"Updated to {read_version()} — restarting installer")
-
-    # Real UID is still 0, so the re-exec'd wrapper stays root and repeats
-    # the same euid-drop hop.
-    installer = REPO_ROOT / prog
-    os.environ["MAC_TAHOE_UPDATED"] = "1"
-    try:
-        os.execv(str(installer), [str(installer), *argv])
-    except OSError as exc:
-        warn(f"could not restart installer ({exc}) — installing current version")
-        os.environ.pop("MAC_TAHOE_UPDATED", None)
 
 
 def apply_overrides(feat: dict[str, object], parsed: ParsedArgs) -> dict[str, object]:
@@ -1078,9 +919,6 @@ def run_install(argv: list[str], tui: bool = False,
     if parsed.help:
         print(INSTALL_HELP)
         return 0
-    if parsed.check_update:
-        return 0 if not check_for_updates(verbose=True) else 0
-
     # Root required: .so and QML drops go into the qmake6-reported Qt6
     # dirs; user paths aren't discoverable.
     if not _require_root_and_drop_to_user(prog):
@@ -1114,10 +952,6 @@ def run_install(argv: list[str], tui: bool = False,
 
         banner(read_version())
         if _tui_active(argv, tui):
-            # Update + re-exec BEFORE the wizard so a pull never throws
-            # away selections the user just made.
-            if check_for_updates(inline=True):
-                auto_update_and_reexec(argv, prog)
             wizard = _tui_wizard(feat, "install")
         else:
             wizard = _TUI_UNAVAILABLE
@@ -1131,8 +965,6 @@ def run_install(argv: list[str], tui: bool = False,
                            "  Do not install on production / work systems."):
                 tracker.mark_aborted()
                 return 0
-            if not _tui_active(argv, tui) and check_for_updates(inline=True):
-                auto_update_and_reexec(argv, prog)
             rc = _run_install_body(feat)
         else:
             # The wizard's summary screen already confirmed.
@@ -1192,14 +1024,12 @@ def run_uninstall(argv: list[str], tui: bool = False,
             if not confirm("This will reset your desktop to Breeze defaults."):
                 tracker.mark_aborted()
                 return 0
-            check_for_updates(inline=True)
             rc = _run_uninstall_body(feat)
         else:
             # The wizard's summary screen already confirmed.
             feat = wizard
             feat.pop("_save", False)
             export_env(feat)
-            check_for_updates(inline=True)
             rc = _run_body_with_progress(
                 _run_uninstall_body, feat, "uninstall",
                 _estimate_uninstall_steps(feat))

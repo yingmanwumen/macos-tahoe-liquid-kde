@@ -4,8 +4,7 @@ root-precondition that gates every run.
 Only behaviour the install loop depends on belongs here — the root /
 privilege-drop gate (a sudoless install leaves the dock + global
 menu unloaded), install-step ordering (the dependency graph between
-steps), semver parsing (used to decide if a tag is newer), and
-basic argv parsing. Don't pin cosmetic banner behaviour: that's UI
+steps), and basic argv parsing. Don't pin cosmetic banner behaviour: that's UI
 choice, not install correctness.
 """
 
@@ -20,17 +19,6 @@ import pytest
 def cli_module():
     import cli
     return cli
-
-
-# ── argv parsing ──────────────────────────────────────────────────────
-
-
-def test_parse_args_recognizes_check_update(cli_module):
-    assert cli_module.parse_args(["--check-update"]).check_update is True
-
-
-def test_parse_args_default_check_update_false(cli_module):
-    assert cli_module.parse_args([]).check_update is False
 
 
 # ── install order — the inter-step dependency graph ───────────────────
@@ -49,30 +37,6 @@ def test_install_order_puts_core_theme_steps_before_optional_integrations(cli_mo
     assert order.index("plasma_theme") < order.index("nautilus")
     assert order.index("global_theme") < order.index("portals")
     assert order.index("nautilus") < order.index("portals")
-
-
-# ── semver — used by the update checker to compare local vs latest ────
-
-
-@pytest.mark.parametrize("raw,expected", [
-    ("0.8.0",          (0, 8, 0)),
-    ("1.2.3",          (1, 2, 3)),
-    ("v0.8.0",         (0, 8, 0)),
-    ("1.0.0-rc1",      (1, 0, 0)),
-    ("",               (0, 0, 0)),
-    ("garbage",        (0, 0, 0)),
-])
-def test_parse_semver(cli_module, raw, expected):
-    assert cli_module.parse_semver(raw) == expected
-
-
-def test_parse_semver_orders_correctly(cli_module):
-    """The tuple comparison is the whole point: a string compare would
-    say '0.7.14' < '0.7.9' (lexicographic). Real bug shape: update
-    checker would say a newer release is older because of the string
-    compare."""
-    assert cli_module.parse_semver("v0.8.0") > cli_module.parse_semver("0.7.14")
-    assert cli_module.parse_semver("0.7.14") > cli_module.parse_semver("0.7.9")
 
 
 # ── root precondition + privilege drop ────────────────────────────────
@@ -164,7 +128,6 @@ def test_run_install_requires_root(monkeypatch, cli_module):
     monkeypatch.setattr(cli_module, "parse_args", lambda _argv: type(
         "Parsed", (), {
             "help": False,
-            "check_update": False,
             "preflight_only": False,
             "do_save": False,
             "do_reset": False,
@@ -179,88 +142,6 @@ def test_run_install_requires_root(monkeypatch, cli_module):
     assert cli_module.run_install([]) == 1
     assert called == ["install"]
     assert apply_overrides_called == []
-
-
-# ── auto-update on install (pull newer release, re-exec) ──────────────
-
-
-def test_auto_update_skips_when_recursion_guard_set(cli_module, monkeypatch):
-    """After a successful pull we re-exec with MAC_TAHOE_UPDATED=1; that
-    second run must NOT pull/re-exec again — it just installs."""
-    monkeypatch.setenv("MAC_TAHOE_UPDATED", "1")
-    execv_called: list = []
-    monkeypatch.setattr(cli_module.os, "execv",
-                        lambda *a: execv_called.append(a))
-    # _git must never be consulted on the guarded run.
-    monkeypatch.setattr(cli_module, "_git",
-                        lambda *a, **k: pytest.fail("git touched on guarded run"))
-
-    cli_module.auto_update_and_reexec([])
-    assert execv_called == []
-
-
-def test_auto_update_bails_when_not_a_clean_git_checkout(cli_module, monkeypatch):
-    """A tarball install / dirty tree must fall back to installing the
-    current version, never pull."""
-    monkeypatch.delenv("MAC_TAHOE_UPDATED", raising=False)
-    monkeypatch.setattr(cli_module, "_repo_is_clean_git_checkout", lambda: False)
-    pull_calls: list = []
-    monkeypatch.setattr(cli_module, "_git",
-                        lambda *a, **k: pull_calls.append(a))
-    execv_called: list = []
-    monkeypatch.setattr(cli_module.os, "execv",
-                        lambda *a: execv_called.append(a))
-
-    cli_module.auto_update_and_reexec([])
-    assert pull_calls == []      # never pulled
-    assert execv_called == []    # never re-exec'd
-
-
-def test_auto_update_bails_when_pull_fails(cli_module, monkeypatch):
-    """If git pull fails (conflict, offline, detached), install the
-    current version instead of re-exec'ing into a half-updated tree."""
-    monkeypatch.delenv("MAC_TAHOE_UPDATED", raising=False)
-    monkeypatch.setattr(cli_module, "_repo_is_clean_git_checkout", lambda: True)
-
-    class _Fail:
-        returncode = 1
-        stderr = "fatal: could not fast-forward"
-
-    monkeypatch.setattr(cli_module, "_git", lambda *a, **k: _Fail())
-    execv_called: list = []
-    monkeypatch.setattr(cli_module.os, "execv",
-                        lambda *a: execv_called.append(a))
-
-    cli_module.auto_update_and_reexec([])
-    assert execv_called == []
-    assert os.environ.get("MAC_TAHOE_UPDATED") != "1"  # guard not leaked
-
-
-def test_auto_update_pulls_and_reexecs_install(cli_module, monkeypatch):
-    """Happy path: clean checkout + successful pull → set the recursion
-    guard and re-exec ./install with the same argv."""
-    monkeypatch.delenv("MAC_TAHOE_UPDATED", raising=False)
-    monkeypatch.setattr(cli_module, "_repo_is_clean_git_checkout", lambda: True)
-
-    class _Ok:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    monkeypatch.setattr(cli_module, "_git", lambda *a, **k: _Ok())
-
-    execv_args: list = []
-    monkeypatch.setattr(cli_module.os, "execv",
-                        lambda path, argv: execv_args.append((path, argv)))
-
-    cli_module.auto_update_and_reexec(["--dark", "--no-gtk"])
-
-    assert os.environ.get("MAC_TAHOE_UPDATED") == "1"  # guard set before exec
-    assert len(execv_args) == 1
-    path, argv = execv_args[0]
-    assert path.endswith("/install")
-    # argv[0] is the program, the install flags follow verbatim.
-    assert argv[1:] == ["--dark", "--no-gtk"]
 
 
 # ── _check_deps: probe each package, install ONLY the missing ones ──────
