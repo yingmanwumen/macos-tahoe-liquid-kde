@@ -11,6 +11,16 @@ from __future__ import annotations
 from pathlib import Path
 
 
+def test_nautilus_opens_items_with_single_click():
+    from steps import nautilus
+
+    assert (
+        "org.gnome.nautilus.preferences",
+        "click-policy",
+        "single",
+    ) in nautilus._FINDER_GSETTINGS
+
+
 def _run_generate_bookmarks(
     tmp_path, monkeypatch, user_dirs_text
 ) -> Path:

@@ -111,7 +111,7 @@ _FINDER_GSETTINGS = (
     ("org.gnome.nautilus.preferences", "show-hidden-files", "false"),
     ("org.gnome.nautilus.preferences", "default-sort-order", "name"),
     ("org.gnome.nautilus.preferences", "show-create-link", "true"),
-    ("org.gnome.nautilus.preferences", "click-policy", "double"),
+    ("org.gnome.nautilus.preferences", "click-policy", "single"),
     ("org.gnome.nautilus.icon-view", "default-zoom-level", "small"),
 )
 
